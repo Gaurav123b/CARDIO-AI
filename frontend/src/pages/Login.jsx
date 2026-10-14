@@ -28,12 +28,16 @@ const Login = () => {
     try {
       const { error: signInError } = await signIn(email, password);
       if (signInError) {
-        if (signInError.message.includes('Invalid login credentials')) {
+        const message = String(signInError.message || '').toLowerCase();
+
+        if (
+          message.includes('invalid-credential') ||
+          message.includes('user-not-found') ||
+          message.includes('wrong-password')
+        ) {
           throw new Error('Email or password is incorrect.');
         }
-        if (signInError.message.includes('Email not confirmed')) {
-          throw new Error('Please verify your email before continuing.');
-        }
+
         throw signInError;
       }
       navigate('/predict');

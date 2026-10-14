@@ -15,25 +15,35 @@ import sys
 INPUT_PATH = "data/processed/cleaned_data.csv"
 MODELS_DIR = "models/"
 
-# FEATURES will be dynamically determined from the dataset
 TARGET = "has_heart_disease"
+SELECTED_FEATURES = [
+    'age',
+    'sex_Male',
+    'cholesterol_total',
+    'hdl',
+    'ldl',
+    'triglycerides',
+]
 
 def main():
     if not os.path.exists(INPUT_PATH):
         print(f"Error: {INPUT_PATH} not found.")
         sys.exit(1)
-        
+
     os.makedirs(MODELS_DIR, exist_ok=True)
-    
+
     print(f"Loading cleaned dataset from {INPUT_PATH}...")
     df = pd.read_csv(INPUT_PATH)
-    
-    # 1. Separate X and y
-    FEATURES = [c for c in df.columns if c != TARGET]
-    X = df[FEATURES]
+
+    required_columns = SELECTED_FEATURES + [TARGET]
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for reduced feature model: {missing}")
+
+    X = df[SELECTED_FEATURES]
     y = df[TARGET]
-    
-    print(f"Features (X): {len(FEATURES)} features")
+
+    print(f"Features (X): {len(SELECTED_FEATURES)} features")
     print(f"Target (Y): {TARGET}")
     
     # 3. Split the data into 80% training, 20% testing

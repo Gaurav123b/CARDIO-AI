@@ -57,7 +57,6 @@ const Signup = () => {
       if (data?.user && !data?.session) {
         setSuccessMsg('Account created successfully. Please check your email to verify your account.');
       } else {
-        // Automatic login if email confirmation is disabled on Supabase
         navigate('/predict');
       }
     } catch (err) {

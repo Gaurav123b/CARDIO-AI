@@ -1,18 +1,67 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { predictRisk } from '../services/api';
-import { Loader2, AlertTriangle, ShieldCheck, Activity } from 'lucide-react';
+import { Loader2, AlertTriangle, ShieldCheck, Activity, Upload } from 'lucide-react';
+import * as pdfjs from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const INITIAL_STATE = {
-  age: '', resting_bp_systolic: '', resting_bp_diastolic: '', cholesterol_total: '', hdl: '', ldl: '', triglycerides: '', fasting_blood_sugar: '', hba1c: '', bmi: '', resting_heart_rate: '', max_heart_rate_achieved: '', exercise_induced_angina: '0', st_depression: '', family_history: '0', alcohol_units_per_week: '', exercise_minutes_per_week: '', sleep_hours: '', stress_score: '', wearable_owner: '0', daily_steps: '', diet_quality_score: '', sex: 'Male', chest_pain_type: 'Asymptomatic', smoker_status: 'Never'
+  age: '', sex: 'Male', cholesterol_total: '', hdl: '', ldl: '', triglycerides: ''
 };
 
 const SAMPLE_DATA_HIGH_RISK = {
-  age: 65, resting_bp_systolic: 155, resting_bp_diastolic: 95, cholesterol_total: 240, hdl: 35, ldl: 160, triglycerides: 200, fasting_blood_sugar: 125, hba1c: 6.8, bmi: 32.5, resting_heart_rate: 85, max_heart_rate_achieved: 110, exercise_induced_angina: 1, st_depression: 2.5, family_history: 1, alcohol_units_per_week: 15, exercise_minutes_per_week: 45, sleep_hours: 5, stress_score: 8, wearable_owner: 0, daily_steps: 3000, diet_quality_score: 3, sex: 'Male', chest_pain_type: 'Typical Angina', smoker_status: 'Current'
+  age: 65, sex: 'Male', cholesterol_total: 240, hdl: 35, ldl: 160, triglycerides: 200
 };
 
 const SAMPLE_DATA_LOW_RISK = {
-  age: 32, resting_bp_systolic: 115, resting_bp_diastolic: 75, cholesterol_total: 165, hdl: 65, ldl: 90, triglycerides: 100, fasting_blood_sugar: 85, hba1c: 5.1, bmi: 22.5, resting_heart_rate: 60, max_heart_rate_achieved: 185, exercise_induced_angina: 0, st_depression: 0.0, family_history: 0, alcohol_units_per_week: 2, exercise_minutes_per_week: 300, sleep_hours: 8, stress_score: 3, wearable_owner: 1, daily_steps: 12000, diet_quality_score: 9, sex: 'Female', chest_pain_type: 'Asymptomatic', smoker_status: 'Never'
+  age: 32, sex: 'Female', cholesterol_total: 165, hdl: 65, ldl: 90, triglycerides: 100
+};
+
+const parseReportValues = (text) => {
+  const values = {};
+  const normalized = text.toLowerCase();
+
+  const extractNumber = (patterns) => {
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (match) {
+        const raw = match[1] || match[0];
+        const numeric = Number(String(raw).replace(/[^0-9.]/g, ''));
+        if (Number.isFinite(numeric)) return numeric;
+      }
+    }
+    return null;
+  };
+
+  if (normalized.includes('male')) values.sex = 'Male';
+  if (normalized.includes('female')) values.sex = 'Female';
+
+  values.age = extractNumber([
+    /\bage\s*[:=]\s*(\d{1,3})/,
+    /\bage\s+(\d{1,3})\b/,
+  ]);
+
+  values.cholesterol_total = extractNumber([
+    /(?:total cholesterol|cholesterol total)\s*(?:[:=]\s*|\s+)(\d{2,4})\b/,
+    /\bchol\s*(?:[:=]\s*|\s+)(\d{2,4})\b/,
+  ]);
+
+  values.hdl = extractNumber([
+    /\bhdl(?: cholesterol)?\s*(?:[:=]\s*|\s+)(\d{1,3})\b/,
+    /high[- ]density lipoprotein\s*(?:[:=]\s*|\s+)(\d{1,3})\b/,
+  ]);
+
+  values.ldl = extractNumber([
+    /\bldl(?: cholesterol)?\s*(?:[:=]\s*|\s+)(\d{1,3})\b/,
+    /low[- ]density lipoprotein\s*(?:[:=]\s*|\s+)(\d{1,3})\b/,
+  ]);
+
+  values.triglycerides = extractNumber([
+    /\btriglycerides?\s*(?:[:=]\s*|\s+)(\d{1,4})\b/,
+    /\btg\s*(?:[:=]\s*|\s+)(\d{1,4})\b/,
+  ]);
+
+  return values;
 };
 
 const Predict = () => {
@@ -20,6 +69,8 @@ const Predict = () => {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [uploadingReport, setUploadingReport] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState(null);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -30,6 +81,88 @@ const Predict = () => {
     setFormData(type === 'high' ? SAMPLE_DATA_HIGH_RISK : SAMPLE_DATA_LOW_RISK);
     setResult(null);
     setError(null);
+  };
+
+  const handleReportUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingReport(true);
+    setUploadStatus('Reading PDF report...');
+    setError(null);
+    try {
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+      const fileBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: fileBuffer }).promise;
+      let extractedText = '';
+
+      for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+        const page = await pdf.getPage(pageIndex);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item) => item.str).join(' ');
+        extractedText += `${pageText} `;
+      }
+
+      let parsed = parseReportValues(extractedText);
+      const lipidFields = ['cholesterol_total', 'hdl', 'ldl', 'triglycerides'];
+      const textFieldCount = lipidFields.filter((field) => parsed[field] !== null).length;
+
+      if (textFieldCount < 3) {
+        const { createWorker } = await import('tesseract.js');
+        const worker = await createWorker('eng', 1, {
+          logger: ({ status, progress }) => {
+            if (status === 'recognizing text') {
+              setUploadStatus(`Reading scanned report: ${Math.round(progress * 100)}%`);
+            }
+          },
+        });
+        try {
+          await worker.setParameters({
+            tessedit_pageseg_mode: '6',
+            preserve_interword_spaces: '1',
+          });
+          let ocrText = '';
+          for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+            const page = await pdf.getPage(pageIndex);
+            const viewport = page.getViewport({ scale: 2 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const context = canvas.getContext('2d');
+            if (!context) continue;
+            await page.render({ canvasContext: context, viewport }).promise;
+            const { data } = await worker.recognize(canvas);
+            ocrText += `${data.text} `;
+          }
+          const ocrValues = parseReportValues(ocrText);
+          parsed = Object.fromEntries(
+            Object.entries(parsed).map(([key, value]) => [key, value ?? ocrValues[key]])
+          );
+        } finally {
+          await worker.terminate();
+        }
+      }
+
+      const populated = Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => value !== null && value !== undefined)
+      );
+
+      if (Object.keys(populated).length === 0) {
+        throw new Error('No readable lab values found in the uploaded PDF. Please enter values manually.');
+      }
+
+      setFormData((prev) => ({ ...prev, ...populated }));
+      setResult(null);
+      setError(null);
+      setUploadStatus('Report values imported. Review them before analysis.');
+    } catch (err) {
+      setError(err.message || 'Unable to read the uploaded report PDF.');
+      setUploadStatus(null);
+    } finally {
+      setUploadingReport(false);
+      event.target.value = '';
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -79,33 +212,27 @@ const Predict = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="lg:col-span-2 glass-panel p-8 rounded-3xl">
+          <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Cardio Risk Inputs</h2>
+              <p className="text-sm text-slate-400">Only age, sex, and lipid values are used for prediction.</p>
+            </div>
+            <label aria-busy={uploadingReport} className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-300 hover:bg-cyan-500/20">
+              <Upload className="h-4 w-4" />
+              {uploadingReport ? uploadStatus : 'Upload report PDF'}
+              <input type="file" accept="application/pdf" onChange={handleReportUpload} disabled={uploadingReport} className="hidden" />
+            </label>
+          </div>
+          {uploadStatus && !uploadingReport && <p role="status" className="mb-5 text-sm text-cyan-300">{uploadStatus}</p>}
+
           <form onSubmit={handleSubmit}>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
               {renderInput('Age', 'age')}
               {renderSelect('Sex', 'sex', [{value: 'Male', label: 'Male'}, {value: 'Female', label: 'Female'}])}
-              {renderInput('Resting BP Systolic', 'resting_bp_systolic')}
-              {renderInput('Resting BP Diastolic', 'resting_bp_diastolic')}
               {renderInput('Cholesterol Total', 'cholesterol_total')}
               {renderInput('HDL', 'hdl')}
               {renderInput('LDL', 'ldl')}
               {renderInput('Triglycerides', 'triglycerides')}
-              {renderInput('Fasting Blood Sugar', 'fasting_blood_sugar')}
-              {renderInput('HbA1c', 'hba1c')}
-              {renderInput('BMI', 'bmi')}
-              {renderInput('Resting Heart Rate', 'resting_heart_rate')}
-              {renderInput('Max Heart Rate Achieved', 'max_heart_rate_achieved')}
-              {renderSelect('Exercise Induced Angina', 'exercise_induced_angina', [{value: '0', label: 'No'}, {value: '1', label: 'Yes'}])}
-              {renderInput('ST Depression', 'st_depression')}
-              {renderSelect('Family History', 'family_history', [{value: '0', label: 'No'}, {value: '1', label: 'Yes'}])}
-              {renderInput('Alcohol Units / Week', 'alcohol_units_per_week')}
-              {renderInput('Exercise Mins / Week', 'exercise_minutes_per_week')}
-              {renderInput('Sleep Hours', 'sleep_hours')}
-              {renderInput('Stress Score', 'stress_score')}
-              {renderSelect('Wearable Owner', 'wearable_owner', [{value: '0', label: 'No'}, {value: '1', label: 'Yes'}])}
-              {renderInput('Daily Steps', 'daily_steps')}
-              {renderInput('Diet Quality Score', 'diet_quality_score')}
-              {renderSelect('Chest Pain Type', 'chest_pain_type', [{value: 'Typical Angina', label: 'Typical Angina'}, {value: 'Atypical Angina', label: 'Atypical Angina'}, {value: 'Non-Anginal Pain', label: 'Non-Anginal Pain'}, {value: 'Asymptomatic', label: 'Asymptomatic'}])}
-              {renderSelect('Smoker Status', 'smoker_status', [{value: 'Never', label: 'Never'}, {value: 'Former', label: 'Former'}, {value: 'Current', label: 'Current'}])}
             </div>
 
             <div className="flex flex-wrap gap-4 justify-center items-center pt-6 border-t border-white/10">

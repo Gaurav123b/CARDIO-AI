@@ -1,15 +1,26 @@
 import { createContext, useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updatePassword as firebaseUpdatePassword,
+  updateProfile,
+} from 'firebase/auth';
+import { auth } from '../lib/firebaseClient';
+
+const normalizeSession = (user) => (user ? { user } : null);
 
 export const AuthContext = createContext({
   user: null,
   session: null,
   loading: true,
-  signUp: async () => {},
-  signIn: async () => {},
-  signOut: async () => {},
-  resetPassword: async () => {},
-  updatePassword: async () => {},
+  signUp: async () => ({ data: { user: null, session: null }, error: null }),
+  signIn: async () => ({ data: { user: null, session: null }, error: null }),
+  signOut: async () => ({ error: null }),
+  resetPassword: async () => ({ error: null }),
+  updatePassword: async () => ({ error: null }),
 });
 
 export const AuthProvider = ({ children }) => {
@@ -18,61 +29,107 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (error) {
-        console.error('Error getting session:', error.message);
-      }
-      setSession(session);
-      setUser(session?.user || null);
+    if (!auth) {
+      setLoading(false);
+      return undefined;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setSession(normalizeSession(currentUser));
       setLoading(false);
     });
 
-    // Listen for changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user || null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    return unsubscribe;
   }, []);
 
   const signUp = async (email, password, fullName) => {
-    return supabase.auth.signUp({
-      email,
-      password,
-      options: {
+    try {
+      if (!auth) {
+        throw new Error('Firebase is not configured. Add VITE_FIREBASE_* values in .env.local.');
+      }
+
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+
+      if (fullName) {
+        await updateProfile(userCredential.user, { displayName: fullName });
+      }
+
+      return {
         data: {
-          full_name: fullName,
+          user: userCredential.user,
+          session: normalizeSession(userCredential.user),
         },
-      },
-    });
+        error: null,
+      };
+    } catch (error) {
+      return {
+        data: { user: null, session: null },
+        error,
+      };
+    }
   };
 
   const signIn = async (email, password) => {
-    return supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      if (!auth) {
+        throw new Error('Firebase is not configured. Add VITE_FIREBASE_* values in .env.local.');
+      }
+
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+
+      return {
+        data: {
+          user: userCredential.user,
+          session: normalizeSession(userCredential.user),
+        },
+        error: null,
+      };
+    } catch (error) {
+      return {
+        data: { user: null, session: null },
+        error,
+      };
+    }
   };
 
   const signOut = async () => {
-    return supabase.auth.signOut();
+    try {
+      if (!auth) {
+        return { error: null };
+      }
+
+      await firebaseSignOut(auth);
+      return { error: null };
+    } catch (error) {
+      return { error };
+    }
   };
 
   const resetPassword = async (email, redirectTo) => {
-    return supabase.auth.resetPasswordForEmail(email, {
-      redirectTo,
-    });
+    try {
+      if (!auth) {
+        throw new Error('Firebase is not configured. Add VITE_FIREBASE_* values in .env.local.');
+      }
+
+      await sendPasswordResetEmail(auth, email, redirectTo ? { url: redirectTo } : undefined);
+      return { error: null };
+    } catch (error) {
+      return { error };
+    }
   };
 
   const updatePassword = async (newPassword) => {
-    return supabase.auth.updateUser({
-      password: newPassword,
-    });
+    try {
+      if (!auth || !auth.currentUser) {
+        throw new Error('No authenticated user found.');
+      }
+
+      await firebaseUpdatePassword(auth.currentUser, newPassword);
+      return { error: null };
+    } catch (error) {
+      return { error };
+    }
   };
 
   const value = {
